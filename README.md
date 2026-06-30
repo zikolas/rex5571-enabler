@@ -1,6 +1,6 @@
-# REX-5571 Enabler (`REXENA`)
+# Ratoc REX-5571 Enabler (`REXENA`)
 
-A clean-room DOS point enabler for the **Ratoc REX-5571** PCMCIA sound card.
+A DOS point enabler for the **Ratoc REX-5571** PCMCIA sound card.
 
 The REX-5571 is a PC Card sound device whose DOS driver/enabler is, as far as I
 can tell, lost to time. Without an enabler the card never powers up or decodes
@@ -8,7 +8,7 @@ any I/O, so DOS software can't see it. `REXENA` brings the card fully to life
 from a single command — **no Card Services, no Socket Services, no vendor
 driver required** — by programming the PCMCIA host controller directly.
 
-It was developed and tested on an **IBM PC110** palmtop (Intel 82365SL-class
+It was developed and tested on an **IBM PC110** palmtop and IBM Thinkpad 755C (Intel 82365SL-class
 PCIC), driven entirely remotely over a serial link using
 [COMrade](https://github.com/yyzkevin/COMrade) — a big thank-you to **yyzkevin**,
 whose tool made it possible to probe registers, read the CIS, and build and test
@@ -41,11 +41,10 @@ Power        : 5 V only (no Vpp, no DMA channel declared)
 **The catch is DMA.** This card/socket has no working DMA channel, so *DMA-based*
 SB digitized playback is silent and the SB completion IRQ never fires — but
 *direct-DAC (PIO)* PCM **does** work, so plenty of games still get digital sound.
-See [Sound Blaster support and DMA](#sound-blaster-support-and-dma) below.
 
 The MPU-401 is a MIDI *port*, not a synthesizer — the ES1688 has no onboard
 wavetable. Connect an external module (MT-32, SC-55, etc.) to the card's MIDI
-cable. (Tested playing to a Roland MT-32.)
+cable. (Tested playing to a Roland CM-32L.)
 
 ## Sound Blaster support and DMA
 
@@ -79,11 +78,6 @@ samples straight to the DSP in direct mode, so they get full digital audio here 
 all work. Games that *require* DMA-based SB digitized audio (common from the
 mid-'90s onward) will play FM/MIDI but be silent on digital. When a game offers a
 **"Sound Blaster Direct"**-style output, pick it over plain "Sound Blaster".
-
-**Quick litmus test:** while a game runs, peek at 8237 DMA channel 1. If it's
-idle (stale count, no activity) the game is using direct-DAC and will sound fine;
-if a real buffer length is loaded and the count ticks down, it wants DMA and will
-be silent on this card.
 
 ## Usage
 
