@@ -8,11 +8,12 @@ any I/O, so DOS software can't see it. `REXENA` brings the card fully to life
 from a single command — **no Card Services, no Socket Services, no vendor
 driver required** — by programming the PCMCIA host controller directly.
 
-It was developed and tested on an **IBM PC110** palmtop and IBM Thinkpad 755C (Intel 82365SL-class
-PCIC), driven entirely remotely over a serial link using
-[COMrade](https://github.com/yyzkevin/COMrade) — a big thank-you to **yyzkevin**,
-whose tool made it possible to probe registers, read the CIS, and build and test
-the enabler on the PC110 without ever sitting in front of it. It should work on
+It was developed and tested on an **IBM PC110** palmtop and an **IBM ThinkPad
+755C** (both Intel 82365SL-class PCICs), driven entirely remotely over a serial
+link using [COMrade](https://github.com/yyzkevin/COMrade) — a big thank-you to
+**yyzkevin**, whose tool made it possible to probe registers, read the CIS, and
+build and test the enabler on real hardware without ever sitting in front of it.
+It should work on
 any machine with a register-compatible 82365 PCIC decoding the standard
 index/data ports `0x3E0/0x3E1`.
 
@@ -37,10 +38,6 @@ Power        : 5 V only (no Vpp, no DMA channel declared)
 | ESFM / AdLib FM music | SB base **and** `0x388` | ✅ |
 | MPU-401 MIDI (UART) | `0x330` | ✅ (external module on MIDI-out) |
 | Gameport / joystick | `0x201` | ✅ with `/JOY` (excludes FM/MPU — see I/O windows) |
-
-**The catch is DMA.** This card/socket has no working DMA channel, so *DMA-based*
-SB digitized playback is silent and the SB completion IRQ never fires — but
-*direct-DAC (PIO)* PCM **does** work, so plenty of games still get digital sound.
 
 The MPU-401 is a MIDI *port*, not a synthesizer — the ES1688 has no onboard
 wavetable. Connect an external module (MT-32, SC-55, etc.) to the card's MIDI
@@ -83,7 +80,7 @@ mid-'90s onward) will play FM/MIDI but be silent on digital. When a game offers 
 
 Run it once; the configuration persists in the PCIC until power-off/suspend
 (the enabler is **not** a TSR). `REXENA` only programs the hardware — set the
-`BLASTER` variable yourself (a child process can't set it in the shell), then
+`BLASTER` variable yourself, then
 launch your SB Pro / AdLib / General-MIDI software:
 
 ```
@@ -185,10 +182,8 @@ automatically. `REXENA` talks straight to the 82365 PCIC and the card:
 1. **Verify** the PCIC (IDREV bits 7:6 = `10`).
 2. **Identify the card.** Power a socket at 5 V (`POWER` reg `0x95`: Vcc + Vpp =
    5 V, never 12 V), map a memory window onto its *attribute memory*, and walk
-   the CIS for the manufacturer ID. Only a RATOC `0xC015 / 0x0001` match
-   proceeds; anything else is powered straight back down, untouched. Without
-   `/S`, every PCIC found (sockets 0–7 across chips at `0x3E0/3E2/3E4/3E6`) is
-   scanned.
+   the CIS for the manufacturer ID (RATOC `0xC015 / 0x0001`). (Match-or-power-down
+   and the auto-scan across sockets are covered under [Usage](#usage).)
 3. **Write the COR** (Configuration Option Register at attribute address
    `0x400`) with config index `0x20` — this enables the card's I/O interface.
 4. **Map I/O windows:** window 0 = SB base (16 bytes); window 1 = the chosen
@@ -215,3 +210,16 @@ comes from disassembling the Ratoc vendor drivers.
 ## License
 
 Copyright (c) 2026 zikolas. MIT License — see [LICENSE](LICENSE).
+
+## Disclaimer
+
+This is a hobby project, shared in the spirit of retro tinkering. It pokes PCMCIA
+controller and sound-chip registers directly on 30-year-old hardware, so the
+usual friendly warnings apply:
+
+- **Provided as-is, with no guarantees of success** — it may or may not work with
+  your card, your machine, or your particular phase of the moon.
+- **No warranty, and no responsibility for any damage** — to hardware, data,
+  software, or sanity — arising from its use. You run it entirely at your own risk.
+- It's only been exercised on the hardware named above; anywhere else, your
+  mileage may vary.
