@@ -96,7 +96,7 @@ static struct known_card known_cards[] = {
     { 0xC015, 0x0001, "CARD 72", 0x20, "RATOC REX-5572"                },
     { 0xC015, 0x0001, "CARD 71", 0x20, "RATOC REX-5571"                },
     { 0xC015, 0x0001, 0,         0x20, "RATOC REX-5571/5572 (unknown)" },
-    { 0x0032, 0x0204, 0,         0x20, "Panasonic/KME KXL-C101"        },
+    { 0x0032, 0x0204, 0,         0x20, "Panasonic/KME KXL-C101"        }, /* a.k.a. KXL-D20 / KXL-D745 */
     { 0, 0, 0, 0, 0 }
 };
 

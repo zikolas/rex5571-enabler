@@ -38,7 +38,7 @@ their CIS at runtime and names the one it finds:
 |---|---|---|
 | Ratoc **REX-5571** | `C015/0001` | sound only ("SOUND CARD 71") |
 | Ratoc **REX-5572** | `C015/0001` | sound + SCSI-2 ("SOUND/SCSI2 CARD 72") — REXENA drives the sound half |
-| Panasonic/KME **KXL-C101** | `0032/0204` | sound + CD-ROM ("KME / KXLC101") |
+| Panasonic/KME **KXL-C101** | `0032/0204` | sound + CD-ROM ("KME / KXLC101"); also sold as **KXL-D20 / KXL-D745** in other regions |
 
 The 5571 and 5572 share the same MANFID, so REXENA tells them apart by the
 `VERS_1` product string. It reports what it found, for example:
