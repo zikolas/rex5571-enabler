@@ -6,9 +6,10 @@
  * Services / Socket Services required.
  *
  * The card is an ESS ES1688 (Sound Blaster Pro compatible, DSP v3.01).
- * REXENA identifies it by CIS manufacturer ID (RATOC, 0xC015/0x0001) before
- * programming anything; a non-matching card is read then powered back down.
- * Without /S it scans every PCIC it finds (sockets 0..7).
+ * REXENA identifies it from the CIS against a small manifest of known ES1688
+ * cards (RATOC REX-5571/5572, Panasonic/KME KXL-C101); an unrecognized card is
+ * reported and powered back down. /FORCE skips the check (needs /S). Without /S
+ * it scans every PCIC it finds (sockets 0..7).
  *
  * Features map to the 82365's TWO I/O windows. Window 0 is always the Sound
  * Blaster block (DSP, mixer, SB-base FM). Window 1 is one contiguous range:
@@ -20,7 +21,7 @@
  * Build (Open Watcom 1.9, 16-bit real mode):  wcl -ms -0 -bcl=dos REXENA.C
  *
  * Usage: REXENA [/SB[=220]] [/FM[=388]] [/MPU[=330]] [/JOY]
- *               [/I=5] [/S=0..7] [/W=D000] [/OFF]
+ *               [/I=5] [/S=0..7] [/W=D000] [/FORCE] [/OFF]
  *   /SB[=hex]  Sound Blaster base (always enabled; default 220)
  *   /FM[=hex]  dedicated AdLib/ESFM FM port (default 388)
  *   /MPU[=hex] MPU-401 MIDI port (default 330; 300/310/320/330)
@@ -28,6 +29,7 @@
  *   /I=dec     IRQ (default 5; MPU needs 5/7/9/10)
  *   /S=dec     socket 0..7 (default: auto-detect)
  *   /W=hex     attr-mem window segment for the CIS read / COR write (def D000)
+ *   /FORCE     configure the socket without the CIS identity check (needs /S)
  *   /OFF       power the socket down and exit
  * With no /FM /MPU /JOY, the default add-ons are FM + MPU. Impossible or
  * out-of-range combinations are rejected before any hardware is programmed.
@@ -43,6 +45,7 @@
 
 static unsigned pcic_idx = PCIC_BASE;
 static unsigned sockoff  = 0;
+static int      force    = 0;   /* /FORCE: skip the CIS identity check (unreadable/foreign CIS) */
 
 static void select_socket(unsigned s)
 {
@@ -77,24 +80,78 @@ static int dsp_get(unsigned b)
     return -1;
 }
 
-static int is_rex5571(unsigned seg)
+/* --- Manifest of known ES1688-family cards -----------------------------
+ * Keyed on CISTPL_MANFID (manufacturer + card ID). The RATOC REX-5571 and
+ * REX-5572 share the SAME MANFID (C015/0001), so a VERS_1 substring picks the
+ * exact model. cor_index is the COR config index for the SOUND function
+ * (curated: the 5572's CIS *default* index 0x22 selects its SCSI side, so we do
+ * NOT read the index from the CIS - we pin the known-good sound value here). */
+struct known_card {
+    unsigned      manf, card;    /* CISTPL_MANFID: TPLMID_MANF / TPLMID_CARD */
+    char         *vers_match;    /* CISTPL_VERS_1 substring; 0 = match any */
+    unsigned char cor_index;     /* COR config index for the sound function */
+    char         *name;
+};
+static struct known_card known_cards[] = {
+    { 0xC015, 0x0001, "CARD 72", 0x20, "RATOC REX-5572"                },
+    { 0xC015, 0x0001, "CARD 71", 0x20, "RATOC REX-5571"                },
+    { 0xC015, 0x0001, 0,         0x20, "RATOC REX-5571/5572 (unknown)" },
+    { 0x0032, 0x0204, 0,         0x20, "Panasonic/KME KXL-C101"        },
+    { 0, 0, 0, 0, 0 }
+};
+
+/* identity of the last probed socket's card, read from its CIS */
+static unsigned g_manf = 0, g_card = 0;
+static char     g_vers[80];
+static struct known_card *g_match = 0;
+
+static int contains(const char *hay, const char *needle)
+{
+    int i, j;
+    if (!needle || !needle[0]) return 1;
+    for (i = 0; hay[i]; i++) {
+        for (j = 0; needle[j] && hay[i + j] == needle[j]; j++) ;
+        if (!needle[j]) return 1;
+    }
+    return 0;
+}
+
+/* Walk the CIS in the mapped attribute window; fill g_manf/g_card/g_vers. */
+static void read_cis(unsigned seg)
 {
     unsigned char __far *p = (unsigned char __far *)MK_FP(seg, 0);
     unsigned off = 0;
-    int guard;
-    for (guard = 0; guard < 48; guard++) {
+    int guard, vi = 0, m;
+    g_manf = g_card = 0; g_vers[0] = 0;
+    for (guard = 0; guard < 64; guard++) {
         unsigned char code = p[off], link;
-        if (code == 0xFF) return 0;
+        if (code == 0xFF) break;
+        if (code == 0x00) { off += 2; continue; }   /* null tuple = 1 CIS byte */
         link = p[off + 2];
-        if (code == 0x20) {
-            unsigned manuf = (unsigned)p[off + 4] | ((unsigned)p[off + 6] << 8);
-            unsigned info  = (unsigned)p[off + 8] | ((unsigned)p[off + 10] << 8);
-            return (manuf == 0xC015 && info == 0x0001);
+        if (code == 0x20) {                          /* CISTPL_MANFID */
+            g_manf = (unsigned)p[off + 4] | ((unsigned)p[off + 6] << 8);
+            g_card = (unsigned)p[off + 8] | ((unsigned)p[off + 10] << 8);
+        } else if (code == 0x15) {                   /* CISTPL_VERS_1: maj,min,strings */
+            for (m = 2; m < link; m++) {
+                unsigned char c = p[off + 4 + 2 * m];
+                if (vi < (int)sizeof(g_vers) - 1) g_vers[vi++] = c ? (char)c : ' ';
+            }
+            g_vers[vi] = 0;
         }
-        if (link == 0xFF) return 0;
+        if (link == 0xFF) break;
         off += ((unsigned)link + 2) * 2;
-        if (off >= 0x3000) return 0;
+        if (off >= 0x3000) break;
     }
+    while (vi > 0 && g_vers[vi - 1] == ' ') g_vers[--vi] = 0;   /* trim */
+}
+
+static struct known_card *identify(void)
+{
+    int i;
+    for (i = 0; known_cards[i].name; i++)
+        if (known_cards[i].manf == g_manf && known_cards[i].card == g_card
+            && contains(g_vers, known_cards[i].vers_match))
+            return &known_cards[i];
     return 0;
 }
 
@@ -112,7 +169,9 @@ static int probe_socket(unsigned memseg)
     wr(0x12, stop  & 0xFF);  wr(0x13, (stop  >> 8) & 0x3F);
     wr(0x14, woff  & 0xFF);  wr(0x15, (woff  >> 8) & 0xFF);
     wr(0x06, rd(0x06) | 0x01);
-    if (is_rex5571(memseg)) return 1;
+    read_cis(memseg);                            /* fill g_manf/g_card/g_vers */
+    g_match = identify();                         /* manifest lookup (NULL = unknown) */
+    if (force || g_match) return 1;              /* /FORCE skips the accept-list gate */
     wr(0x06, 0x00); wr(0x03, 0x00); wr(0x02, 0x00);
     return 0;
 }
@@ -147,6 +206,7 @@ int main(int argc, char **argv)
         char *a = argv[i], *vp;
         if (a[0] != '/' && a[0] != '-') continue;
         if      (sw(a, "OFF", &vp)) off = 1;
+        else if (sw(a, "FORCE", &vp)) force = 1;
         else if (sw(a, "JOY", &vp)) en_joy = 1;
         else if (sw(a, "MPU", &vp)) { en_mpu = 1; if (vp) mpu = (unsigned)strtol(vp, 0, 16); }
         else if (sw(a, "SB",  &vp)) { if (vp) base = (unsigned)strtol(vp, 0, 16); }
@@ -171,6 +231,10 @@ int main(int argc, char **argv)
     /* --- validate before touching hardware --- */
     if (sgiven && sock > MAX_SOCKET) { printf("Bad /S=%u : socket must be 0..%u\n", sock, MAX_SOCKET); return 2; }
     if (!off) {
+        if (force && !sgiven) {
+            printf("/FORCE needs /S=n : name the socket to configure without the CIS check.\n");
+            return 2;
+        }
         if (en_joy && (en_fm || en_mpu)) {
             printf("/JOY can't be combined with /FM or /MPU.\n");
             printf("Only two I/O windows: the gameport (201) is below the SB base, FM/MPU\n");
@@ -204,7 +268,12 @@ int main(int argc, char **argv)
         select_socket(sock);
         if (!controller_present()) { printf("No PCIC controller for socket %u (port %03X)\n", sock, pcic_idx); return 1; }
         found = probe_socket(memseg);
-        if (!found) { printf("REX-5571 not found in socket %u (CIS MANFID != RATOC C015/0001).\n", sock); return 3; }
+        if (!found) {
+            if (g_manf) printf("Socket %u: unrecognized card - MANFID %04X/%04X \"%s\".\n"
+                               "  Use /FORCE, or add it to the manifest.\n", sock, g_manf, g_card, g_vers);
+            else        printf("Socket %u: no card present/ready.\n", sock);
+            return 3;
+        }
     } else {
         for (chip = 0; chip < 4 && !found; chip++) {
             pcic_idx = PCIC_BASE + chip * 2; sockoff = 0;
@@ -217,15 +286,17 @@ int main(int argc, char **argv)
             }
         }
         if (!found) {
-            if (!any_chip) printf("No 82365-class PCIC found (scanned 3E0/3E2/3E4/3E6).\n");
-            else           printf("REX-5571 not found in any socket (CIS MANFID != RATOC C015/0001).\n");
+            if (!any_chip)   printf("No 82365-class PCIC found (scanned 3E0/3E2/3E4/3E6).\n");
+            else if (g_manf) printf("No known card matched (last seen MANFID %04X/%04X \"%s\").\n"
+                                    "  Use /FORCE /S=n, or add it to the manifest.\n", g_manf, g_card, g_vers);
+            else             printf("No known card in any socket. Use /FORCE /S=n for an unreadable CIS.\n");
             return any_chip ? 3 : 1;
         }
     }
 
     /* COR (config index 0x20) via the attribute window probe_socket left mapped */
     cor = (unsigned char __far *)MK_FP(memseg, 0x400);
-    *cor = 0x20;
+    *cor = g_match ? g_match->cor_index : 0x20;   /* curated per-card; 0x20 for forced/unknown */
 
     /* I/O window 0 = SB */
     wr(0x08, w0s & 0xFF);  wr(0x09, (w0s >> 8) & 0xFF);
@@ -275,7 +346,11 @@ int main(int argc, char **argv)
         }
     }
 
-    printf("REX-5571 enabled: socket %u%s  DSP v%u.%02u\n", sock, sgiven ? "" : " (auto)", maj, min);
+    printf("%s%s: socket %u%s  DSP v%u.%02u\n",
+           g_match ? g_match->name : "Unknown card",
+           g_match ? "" : " (FORCED)",
+           sock, (g_match && !sgiven) ? " (auto)" : "", maj, min);
+    printf("   CIS: %s  (MANFID %04X/%04X)\n", g_vers[0] ? g_vers : "unreadable", g_manf, g_card);
     printf("   SB %03X", base);
     if (en_fm)  printf("  FM %03X", fm);
     if (en_mpu) printf("  MPU %03X%s", mpu, mpu_ok ? "" : "(?)");
