@@ -29,6 +29,29 @@ Config base  : attribute address 0x400, config index 0x20
 Power        : 5 V only (no Vpp, no DMA channel declared)
 ```
 
+## Supported cards
+
+Written for the REX-5571, REXENA now recognizes several ES1688-based PC Cards by
+their CIS at runtime and names the one it finds:
+
+| Card | MANFID | Notes |
+|---|---|---|
+| Ratoc **REX-5571** | `C015/0001` | sound only ("SOUND CARD 71") |
+| Ratoc **REX-5572** | `C015/0001` | sound + SCSI-2 ("SOUND/SCSI2 CARD 72") — REXENA drives the sound half |
+| Panasonic/KME **KXL-C101** | `0032/0204` | sound + CD-ROM ("KME / KXLC101") |
+
+The 5571 and 5572 share the same MANFID, so REXENA tells them apart by the
+`VERS_1` product string. It reports what it found, for example:
+
+```
+RATOC REX-5572: socket 0 (auto)  DSP v3.01
+   CIS: RATOC System Inc. SOUND/SCSI2 CARD 72  (MANFID C015/0001)
+```
+
+A card whose CIS is unreadable, or simply not in this list, can still be brought
+up with **`/FORCE`** (see Usage) — the SB DSP self-test then confirms an ES1688 is
+actually answering, so it won't misconfigure an empty or non-ES1688 socket.
+
 ## What works
 
 | Feature | Address | Status |
@@ -91,7 +114,7 @@ SET BLASTER=A220 I5 D1 T4
 Match the `SET BLASTER` values to whatever ports/IRQ you passed to `REXENA`.
 
 ```
-REXENA [/SB[=220]] [/FM[=388]] [/MPU[=330]] [/JOY] [/I=5] [/S=0..7] [/W=D000] [/OFF]
+REXENA [/SB[=220]] [/FM[=388]] [/MPU[=330]] [/JOY] [/I=5] [/S=0..7] [/W=D000] [/FORCE] [/OFF]
   /SB[=hex]   Sound Blaster base I/O port (always enabled; default 220)
   /FM[=hex]   dedicated AdLib/ESFM FM port (default 388)
   /MPU[=hex]  MPU-401 MIDI port (default 330; one of 300/310/320/330)
@@ -99,6 +122,7 @@ REXENA [/SB[=220]] [/FM[=388]] [/MPU[=330]] [/JOY] [/I=5] [/S=0..7] [/W=D000] [/
   /I=dec      IRQ (default 5; MPU requires 5/7/9/10)
   /S=dec      socket number 0..7 (default: auto-detect the card)
   /W=hex      attribute-memory window segment used to write the COR (default D000)
+  /FORCE      configure the socket without the CIS identity check (requires /S)
   /OFF        power the socket down and exit
 ```
 
@@ -107,12 +131,17 @@ Each feature is a switch. SB is always on (it's the chip's control interface);
 add-ons are **FM + MPU**. Give any add-on switch and you get exactly those, e.g.
 `REXENA /JOY` is SB + gameport, `REXENA /MPU` is SB + MPU only.
 
-Before programming anything, `REXENA` identifies the card by its CIS
-manufacturer ID (RATOC, `0xC015` / `0x0001`): it powers a socket, reads the
-attribute-memory CIS, and only proceeds if it matches — a foreign card is read
-and then powered straight back down, never configured. With no `/S` it scans
-every PCIC it finds and uses the first socket holding a REX-5571 (the output
-tags it `(auto)`); `/S=n` forces a specific socket instead.
+Before programming anything, `REXENA` identifies the card from its CIS: it powers
+a socket, reads the attribute-memory CIS, matches the MANFID (and `VERS_1`)
+against the [supported-cards](#supported-cards) manifest, and only proceeds on a
+match — an unrecognized card is read, reported, and powered straight back down.
+With no `/S` it scans every PCIC it finds and uses the first socket holding a
+known card (the output tags it `(auto)`); `/S=n` selects a specific socket.
+
+**`/FORCE`** skips that manifest check and configures the named socket directly —
+for a card whose CIS is unreadable or not yet listed. It still self-tests the SB
+DSP, so it won't misconfigure an empty or non-ES1688 socket. `/FORCE` requires
+`/S=n`.
 
 Each 82365 chip drives two sockets, and additional chips live at the next
 index/data port pair — `0x3E0/1`, `0x3E2/3`, `0x3E4/5`, `0x3E6/7` — so socket
