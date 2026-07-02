@@ -40,11 +40,26 @@ their CIS at runtime and names the one it finds:
 | Ratoc **REX-5572** | `C015/0001` | sound + SCSI-2 ("SOUND/SCSI2 CARD 72") — REXENA drives the sound half |
 | Panasonic/KME **KXL-C101** | `0032/0204` | sound + CD-ROM ("KME / KXLC101"); also sold as **KXL-D20 / KXL-D745** in other regions |
 | Eiger Labs **EPX-AA2000** | `0004/2000` | ES1688 sound card; COR base `0x3F0` (read from CIS). **Added from a CIS dump — not yet hardware-tested** |
+| IBM **PCMCIA Portable CD-ROM Drive** | `00A4/002D` | ES1688 in an external CD-ROM box; COR base `0x200`, index `0x01`. Sound is **Windows-only** in the vendor stack — REXENA brings it up in DOS via a box **amp-enable** (below). CD-ROM/IDE half ignored; **no usable MPU** (below) |
 
-REXENA reads each card's COR base address from its `CISTPL_CONFIG` (most use
-`0x400`; the Eiger uses `0x3F0`), so the config register is written at the right
-place per card. The config *index* is still curated per model in the manifest
-(the 5572's CIS default index selects its SCSI side, so it can't be auto-read).
+REXENA reads each card's COR base address from its `CISTPL_CONFIG` (`0x400` for
+most, `0x3F0` on the Eiger, `0x200` on the IBM box), so the config register is
+written at the right place per card. The config *index* is still curated per model
+in the manifest (the 5572's CIS default index selects its SCSI side; the IBM box
+uses `0x01`, so it can't be auto-read).
+
+**Box amp-enable (combo cards).** Some cards route the ES1688 through an external
+power amp that's gated by one of the chip's general-purpose outputs (port `2x7h`,
+bits GPO0/GPO1). The IBM box's amp is held muted until `GPO0` is driven high — the
+Windows driver does this and DOS Card Services never does, which is why the box had
+*no* DOS sound at all. REXENA writes the per-card value (`0x01` for the IBM box)
+automatically; `/GPO=nn` overrides it for probing a new combo card.
+
+**MPU on combo cards.** The Panasonic, Eiger and IBM entries are flagged as having
+no usable MPU-401 (no MIDI connector, or — on the IBM box — the bridge doesn't
+decode address bit A8, so the MPU port aliases onto the SB/IDE/gameport and merely
+enabling it injects noise). REXENA auto-drops MPU for these; the RATOC 5571/5572
+keep it.
 
 The 5571 and 5572 share the same MANFID, so REXENA tells them apart by the
 `VERS_1` product string. It reports what it found, for example:
@@ -66,7 +81,7 @@ actually answering, so it won't misconfigure an empty or non-ES1688 socket.
 | SB digitized audio (PCM) | `0x220` | ✅ direct-DAC (PIO) · ❌ via DMA |
 | ESFM / AdLib FM music | SB base **and** `0x388` | ✅ |
 | MPU-401 MIDI (UART) | `0x330` | ✅ (external module on MIDI-out) |
-| Gameport / joystick | `0x201` | ✅ with `/JOY` (excludes FM/MPU — see I/O windows) |
+| Gameport / joystick | `0x201` | ✅ with `/JOY` — folds into window 0, so it now coexists with FM/MPU |
 
 The MPU-401 is a MIDI *port*, not a synthesizer — the ES1688 has no onboard
 wavetable. Connect an external module (MT-32, SC-55, etc.) to the card's MIDI
@@ -120,22 +135,27 @@ SET BLASTER=A220 I5 D1 T4
 Match the `SET BLASTER` values to whatever ports/IRQ you passed to `REXENA`.
 
 ```
-REXENA [/SB[=220]] [/FM[=388]] [/MPU[=330]] [/JOY] [/I=5] [/S=0..7] [/W=D000] [/FORCE] [/OFF]
+REXENA [/SB[=220]] [/FM[=388]] [/MPU[=330]] [/JOY] [/I=5] [/S=0..7] [/W=D000]
+       [/GPO=hex] [/TONE] [/FORCE] [/OFF]
   /SB[=hex]   Sound Blaster base I/O port (always enabled; default 220)
   /FM[=hex]   dedicated AdLib/ESFM FM port (default 388)
   /MPU[=hex]  MPU-401 MIDI port (default 330; one of 300/310/320/330)
-  /JOY        gameport / joystick at 201 (excludes /FM and /MPU — see below)
+  /JOY        gameport / joystick at 201 (folds into window 0; works with /FM /MPU)
   /I=dec      IRQ (default 5; MPU requires 5/7/9/10)
   /S=dec      socket number 0..7 (default: auto-detect the card)
   /W=hex      attribute-memory window segment used to write the COR (default D000)
+  /GPO=hex    diag: write this byte to the ES1688 GPO port (base+7); overrides the
+              per-card amp-enable, for probing a new combo card
+  /TONE       diag: leave a steady OPL tone playing (self-test of the audio path)
   /FORCE      configure the socket without the CIS identity check (requires /S)
   /OFF        power the socket down and exit
 ```
 
 Each feature is a switch. SB is always on (it's the chip's control interface);
 `/SB=240` just changes its base. With **no** `/FM` `/MPU` `/JOY`, the default
-add-ons are **FM + MPU**. Give any add-on switch and you get exactly those, e.g.
-`REXENA /JOY` is SB + gameport, `REXENA /MPU` is SB + MPU only.
+add-ons are **FM + MPU** — though MPU is auto-dropped on cards flagged as having
+none (the Panasonic, Eiger and IBM box). Give any add-on switch and you get
+exactly those, e.g. `REXENA /JOY` is SB + gameport, `REXENA /MPU` is SB + MPU only.
 
 Before programming anything, `REXENA` identifies the card from its CIS: it powers
 a socket, reads the attribute-memory CIS, matches the MANFID (and `VERS_1`)
@@ -168,36 +188,34 @@ at is reported rather than silently assumed.
 A PC Card socket provides only **two** I/O windows through the PCIC, and that
 limit is what decides which features can run together. **Window 0 is always the
 Sound Blaster block** (16 bytes at the base; the SB base follows window 0's
-start). **Window 1 is a single contiguous range** for the chosen add-on(s). The
-card's add-on ports sit on opposite sides of the SB base:
+start). With **`/JOY`, window 0 stretches down to `0x200`** to take in the
+gameport (`0x201`), which sits just below the SB base. **Window 1 is a single
+contiguous range** above the base for the FM/MPU cluster:
 
-- the **gameport (`0x201`)** is *below* the SB base;
-- **MPU-401 (`0x330`)** and the **dedicated AdLib/ESFM FM port (`0x388`)** are
-  *above* it.
+- **MPU-401 (`0x330`)** and the **dedicated AdLib/ESFM FM port (`0x388`)** share
+  window 1;
+- the **gameport (`0x201`)** rides in window 0, so it coexists with FM and MPU
+  (folding it in here removed the old "`/JOY` excludes `/FM`/`/MPU`" limit).
 
-A single window-1 range can reach the low side **or** the high side, never both
-(spanning them would swallow the SB window). So:
-
-| Combination | Window 1 | OK? |
+| Combination | Window 0 | Window 1 |
 |---|---|---|
-| SB + FM + MPU | `0x330–0x389` | ✅ |
-| SB + MPU (or FM) | `0x330–0x331` / `0x388–0x389` | ✅ |
-| SB + gameport | `0x200–0x207` | ✅ |
-| SB + gameport + FM/MPU | — | ❌ rejected |
+| SB + FM + MPU | `0x220–0x22F` | `0x330–0x389` |
+| SB + FM (or MPU) | `0x220–0x22F` | `0x388–0x389` / `0x330–0x331` |
+| SB + gameport + FM + MPU | `0x200–0x22F` | `0x330–0x389` |
+| SB + gameport | `0x200–0x22F` | — |
 
-`REXENA` plans the windows from your switches, **rejects impossible combos up
-front**, and prints what it actually mapped:
+`REXENA` plans the windows from your switches, rejects out-of-range or overlapping
+combos up front, and prints what it actually mapped:
 
 ```
-   I/O windows: win0 220-22F, win1 200-207
+   I/O windows: win0 200-22F, win1 330-389
 ```
 
-FM at the **SB base** is always present (it's inside window 0), so choosing
-`/JOY` only costs you the standalone `0x388` AdLib port and MPU — SB-Pro-style FM
-still works. The same window-1 range is also where an external I/O conflict would
-bite (e.g. a parallel port at `0x378` falls inside the default `0x330–0x389`
-FM/MPU span); if anything else decodes inside a mapped window the two collide on
-the bus, so keep the SB base and window 1 clear of other active I/O.
+FM at the **SB base** is always present (inside window 0) regardless. Window 1 is
+also where an external I/O conflict would bite (e.g. a parallel port at `0x378`
+falls inside the default `0x330–0x389` FM/MPU span); if anything else decodes
+inside a mapped window the two collide on the bus, so keep the SB base and window 1
+clear of other active I/O.
 
 ## Building
 
@@ -219,18 +237,22 @@ automatically. `REXENA` talks straight to the 82365 PCIC and the card:
    5 V, never 12 V), map a memory window onto its *attribute memory*, and walk
    the CIS for the manufacturer ID (RATOC `0xC015 / 0x0001`). (Match-or-power-down
    and the auto-scan across sockets are covered under [Usage](#usage).)
-3. **Write the COR** (Configuration Option Register at attribute address
-   `0x400`) with config index `0x20` — this enables the card's I/O interface.
-4. **Map I/O windows:** window 0 = SB base (16 bytes); window 1 = the chosen
-   add-on group — either FM/MPU (`0x330`–`0x389`) or the gameport (`0x200`–
-   `0x207`). Only two I/O windows exist, so those two groups can't both be
-   mapped (see [I/O windows](#io-windows)).
+3. **Write the COR** (Configuration Option Register) at the attribute address read
+   from the card's `CISTPL_CONFIG` (`0x400` for most, `0x200` on the IBM box) with
+   the per-card config index (`0x20`, or `0x01` for the IBM box) — this enables the
+   card's I/O interface.
+4. **Map I/O windows:** window 0 = SB base (16 bytes), extended down to `0x200`
+   for `/JOY` to include the gameport; window 1 = the FM/MPU cluster above the base
+   (`0x330`–`0x389`) (see [I/O windows](#io-windows)).
 5. **Switch to I/O-card mode** and steer the card's IREQ to the chosen IRQ.
-6. **Enable MPU-401:** enter ESS extended mode (`0xC6`) and program ESS mixer
-   register `0x40` (read-modify-write, preserving the ESFM-enable bit) with the
-   MPU port and IRQ.
-7. **Self-test:** SB DSP reset handshake (`0xAA`) + version, and MPU-401 UART
-   reset (`0xFE` ACK).
+6. **Enable ESFM / MPU-401:** enter ESS extended mode (`0xC6`) and program ESS
+   mixer register `0x40` (read-modify-write) with the ESFM/legacy-decode bits and,
+   unless the card is flagged no-MPU, the MPU port and IRQ.
+7. **Amp-enable:** on combo cards that gate an external power amp off a GPO, write
+   the per-card value to the ES1688 GPO port (`base+7`) — e.g. `0x01` for the IBM
+   box, which is otherwise silent.
+8. **Self-test:** SB DSP reset handshake (`0xAA`) + version, and (if MPU is on) the
+   MPU-401 UART reset (`0xFE` ACK).
 
 The whole sequence was validated register-by-register against live hardware
 before being committed to code.
