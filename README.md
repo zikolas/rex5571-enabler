@@ -39,6 +39,12 @@ their CIS at runtime and names the one it finds:
 | Ratoc **REX-5571** | `C015/0001` | sound only ("SOUND CARD 71") |
 | Ratoc **REX-5572** | `C015/0001` | sound + SCSI-2 ("SOUND/SCSI2 CARD 72") — REXENA drives the sound half |
 | Panasonic/KME **KXL-C101** | `0032/0204` | sound + CD-ROM ("KME / KXLC101"); also sold as **KXL-D20 / KXL-D745** in other regions |
+| Eiger Labs **EPX-AA2000** | `0004/2000` | ES1688 sound card; COR base `0x3F0` (read from CIS). **Added from a CIS dump — not yet hardware-tested** |
+
+REXENA reads each card's COR base address from its `CISTPL_CONFIG` (most use
+`0x400`; the Eiger uses `0x3F0`), so the config register is written at the right
+place per card. The config *index* is still curated per model in the manifest
+(the 5572's CIS default index selects its SCSI side, so it can't be auto-read).
 
 The 5571 and 5572 share the same MANFID, so REXENA tells them apart by the
 `VERS_1` product string. It reports what it found, for example:

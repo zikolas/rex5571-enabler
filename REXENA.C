@@ -85,7 +85,10 @@ static int dsp_get(unsigned b)
  * REX-5572 share the SAME MANFID (C015/0001), so a VERS_1 substring picks the
  * exact model. cor_index is the COR config index for the SOUND function
  * (curated: the 5572's CIS *default* index 0x22 selects its SCSI side, so we do
- * NOT read the index from the CIS - we pin the known-good sound value here). */
+ * NOT read the index from the CIS - we pin the known-good sound value here).
+ * The COR *base address*, however, IS read from CISTPL_CONFIG per card (see
+ * g_cfgbase): most ES1688 cards put it at 0x400, but e.g. the Eiger EPX-AA2000
+ * uses 0x3F0, and the COR must be written at the card's real base. */
 struct known_card {
     unsigned      manf, card;    /* CISTPL_MANFID: TPLMID_MANF / TPLMID_CARD */
     char         *vers_match;    /* CISTPL_VERS_1 substring; 0 = match any */
@@ -97,11 +100,13 @@ static struct known_card known_cards[] = {
     { 0xC015, 0x0001, "CARD 71", 0x20, "RATOC REX-5571"                },
     { 0xC015, 0x0001, 0,         0x20, "RATOC REX-5571/5572 (unknown)" },
     { 0x0032, 0x0204, 0,         0x20, "Panasonic/KME KXL-C101"        }, /* a.k.a. KXL-D20 / KXL-D745 */
+    { 0x0004, 0x2000, "EPX-AA2000", 0x20, "Eiger Labs EPX-AA2000"      }, /* ES1688; COR base 0x3F0 */
     { 0, 0, 0, 0, 0 }
 };
 
 /* identity of the last probed socket's card, read from its CIS */
 static unsigned g_manf = 0, g_card = 0;
+static unsigned g_cfgbase = 0x400;   /* COR base from CISTPL_CONFIG (default 0x400) */
 static char     g_vers[80];
 static struct known_card *g_match = 0;
 
@@ -122,7 +127,7 @@ static void read_cis(unsigned seg)
     unsigned char __far *p = (unsigned char __far *)MK_FP(seg, 0);
     unsigned off = 0;
     int guard, vi = 0, m;
-    g_manf = g_card = 0; g_vers[0] = 0;
+    g_manf = g_card = 0; g_vers[0] = 0; g_cfgbase = 0x400;
     for (guard = 0; guard < 64; guard++) {
         unsigned char code = p[off], link;
         if (code == 0xFF) break;
@@ -131,6 +136,10 @@ static void read_cis(unsigned seg)
         if (code == 0x20) {                          /* CISTPL_MANFID */
             g_manf = (unsigned)p[off + 4] | ((unsigned)p[off + 6] << 8);
             g_card = (unsigned)p[off + 8] | ((unsigned)p[off + 10] << 8);
+        } else if (code == 0x1A) {                   /* CISTPL_CONFIG: COR base addr */
+            int rasz = (p[off + 4] & 0x03) + 1;      /* TPCC_SZ: TPCC_RADR byte count */
+            g_cfgbase = p[off + 8];                   /* RADR follows TPCC_SZ, TPCC_LAST */
+            if (rasz >= 2) g_cfgbase |= (unsigned)p[off + 10] << 8;
         } else if (code == 0x15) {                   /* CISTPL_VERS_1: maj,min,strings */
             for (m = 2; m < link; m++) {
                 unsigned char c = p[off + 4 + 2 * m];
@@ -294,8 +303,11 @@ int main(int argc, char **argv)
         }
     }
 
-    /* COR (config index 0x20) via the attribute window probe_socket left mapped */
-    cor = (unsigned char __far *)MK_FP(memseg, 0x400);
+    /* COR via the attribute window probe_socket left mapped. Base comes from the
+     * card's CISTPL_CONFIG for a recognized card (e.g. 0x3F0 on the Eiger); for a
+     * /FORCE / unreadable-CIS card we can't trust the parse, so use the 0x400
+     * that's proven across the RATOC/Panasonic family. */
+    cor = (unsigned char __far *)MK_FP(memseg, g_match ? g_cfgbase : 0x400);
     *cor = g_match ? g_match->cor_index : 0x20;   /* curated per-card; 0x20 for forced/unknown */
 
     /* I/O window 0 = SB */
@@ -351,6 +363,7 @@ int main(int argc, char **argv)
            g_match ? "" : " (FORCED)",
            sock, (g_match && !sgiven) ? " (auto)" : "", maj, min);
     printf("   CIS: %s  (MANFID %04X/%04X)\n", g_vers[0] ? g_vers : "unreadable", g_manf, g_card);
+    if (g_match) printf("   COR @ %03Xh index %02X\n", g_cfgbase, g_match->cor_index);
     printf("   SB %03X", base);
     if (en_fm)  printf("  FM %03X", fm);
     if (en_mpu) printf("  MPU %03X%s", mpu, mpu_ok ? "" : "(?)");
