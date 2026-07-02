@@ -11,27 +11,30 @@
  * reported and powered back down. /FORCE skips the check (needs /S). Without /S
  * it scans every PCIC it finds (sockets 0..7).
  *
- * Features map to the 82365's TWO I/O windows. Window 0 is always the Sound
- * Blaster block (DSP, mixer, SB-base FM). Window 1 is one contiguous range:
- *   - the gameport (0x201) is BELOW the SB base
- *   - MPU-401 (0x330) and the dedicated AdLib/ESFM FM port (0x388) are ABOVE it
- * so window 1 can cover the gameport OR the FM/MPU cluster, never both. Hence
- * /JOY cannot be combined with /FM or /MPU. (FM at the SB base is always there.)
+ * Features map to the 82365's TWO I/O windows. Window 0 covers the Sound
+ * Blaster block (DSP, mixer, SB-base FM); with /JOY it stretches down to include
+ * the gameport (0x201, just below the SB base). Window 1 covers the FM/MPU
+ * cluster above the base (MPU-401 0x330, dedicated AdLib/ESFM 0x388). Folding the
+ * gameport into window 0 lets /JOY run alongside /FM and /MPU.
  *
  * Build (Open Watcom 1.9, 16-bit real mode):  wcl -ms -0 -bcl=dos REXENA.C
  *
  * Usage: REXENA [/SB[=220]] [/FM[=388]] [/MPU[=330]] [/JOY]
- *               [/I=5] [/S=0..7] [/W=D000] [/FORCE] [/OFF]
+ *               [/I=5] [/S=0..7] [/W=D000] [/GPO=hex] [/TONE] [/FORCE] [/OFF]
  *   /SB[=hex]  Sound Blaster base (always enabled; default 220)
  *   /FM[=hex]  dedicated AdLib/ESFM FM port (default 388)
  *   /MPU[=hex] MPU-401 MIDI port (default 330; 300/310/320/330)
- *   /JOY       gameport/joystick at 201 (excludes /FM and /MPU)
+ *   /JOY       gameport/joystick at 201 (folded into window 0; ok with /FM/MPU)
  *   /I=dec     IRQ (default 5; MPU needs 5/7/9/10)
  *   /S=dec     socket 0..7 (default: auto-detect)
  *   /W=hex     attr-mem window segment for the CIS read / COR write (def D000)
+ *   /GPO=hex   diag: write this byte to the ES1688 GPO port (base+7) to probe a
+ *              new combo card's amp-enable; overrides the per-card manifest value
+ *   /TONE      diag: leave a steady OPL tone playing (self-test of the audio path)
  *   /FORCE     configure the socket without the CIS identity check (needs /S)
  *   /OFF       power the socket down and exit
- * With no /FM /MPU /JOY, the default add-ons are FM + MPU. Impossible or
+ * With no /FM /MPU /JOY, the default add-ons are FM + MPU; MPU is auto-dropped on
+ * cards flagged as having none (no MIDI jack, or an aliased port). Impossible or
  * out-of-range combinations are rejected before any hardware is programmed.
  */
 
@@ -80,6 +83,26 @@ static int dsp_get(unsigned b)
     return -1;
 }
 
+/* TEST: play a sustained additive tone on OPL channel 0 via the SB-base FM
+ * ports (b+0 addr / b+1 data). Used with /TONE to check audio output with no
+ * separate program - the note keeps sounding after REXENA exits, so we can
+ * toggle /GPO across runs and hear which value un-mutes the box amp. */
+static void fm_tone(unsigned b)
+{
+    static unsigned char reg[] = {
+        0x01,0x20, 0xBD,0x00,
+        0x20,0x21, 0x40,0x00, 0x60,0xF0, 0x80,0x00,   /* modulator (op0) */
+        0x23,0x21, 0x43,0x00, 0x63,0xF0, 0x83,0x00,   /* carrier  (op3) */
+        0xC0,0x01,                                    /* additive: both operators sound */
+        0xA0,0x98, 0xB0,0x32                           /* F-number + block + key-on */
+    };
+    int i;
+    for (i = 0; i < (int)sizeof(reg); i += 2) {
+        outp(b + 0, reg[i]);     iodelay(6);
+        outp(b + 1, reg[i + 1]); iodelay(35);
+    }
+}
+
 /* --- Manifest of known ES1688-family cards -----------------------------
  * Keyed on CISTPL_MANFID (manufacturer + card ID). The RATOC REX-5571 and
  * REX-5572 share the SAME MANFID (C015/0001), so a VERS_1 substring picks the
@@ -93,15 +116,18 @@ struct known_card {
     unsigned      manf, card;    /* CISTPL_MANFID: TPLMID_MANF / TPLMID_CARD */
     char         *vers_match;    /* CISTPL_VERS_1 substring; 0 = match any */
     unsigned char cor_index;     /* COR config index for the sound function */
+    int           amp_gpo;       /* box amp-enable: byte for ES1688 GPO port base+7, or -1 = none */
+    int           no_mpu;        /* 1 = no usable MPU-401 (no MIDI jack, or the port aliases) */
     char         *name;
 };
 static struct known_card known_cards[] = {
-    { 0xC015, 0x0001, "CARD 72", 0x20, "RATOC REX-5572"                },
-    { 0xC015, 0x0001, "CARD 71", 0x20, "RATOC REX-5571"                },
-    { 0xC015, 0x0001, 0,         0x20, "RATOC REX-5571/5572 (unknown)" },
-    { 0x0032, 0x0204, 0,         0x20, "Panasonic/KME KXL-C101"        }, /* a.k.a. KXL-D20 / KXL-D745 */
-    { 0x0004, 0x2000, "EPX-AA2000", 0x20, "Eiger Labs EPX-AA2000"      }, /* ES1688; COR base 0x3F0 */
-    { 0, 0, 0, 0, 0 }
+    { 0xC015, 0x0001, "CARD 72", 0x20, -1,   0, "RATOC REX-5572"                },
+    { 0xC015, 0x0001, "CARD 71", 0x20, -1,   0, "RATOC REX-5571"                },
+    { 0xC015, 0x0001, 0,         0x20, -1,   0, "RATOC REX-5571/5572 (unknown)" },
+    { 0x0032, 0x0204, 0,         0x20, -1,   1, "Panasonic/KME KXL-C101"        }, /* a.k.a. KXL-D20 / KXL-D745; no MIDI */
+    { 0x0004, 0x2000, "EPX-AA2000", 0x20, -1, 1, "Eiger Labs EPX-AA2000"        }, /* ES1688; COR base 0x3F0; no MIDI */
+    { 0x00A4, 0x002D, "CD-ROM", 0x01, 0x01,  1, "IBM Portable CD-ROM (ES1688)"  }, /* combo CD+ES1688; GPO0 gates amp; MPU aliases onto IDE/SB */
+    { 0, 0, 0, 0, -1, 0, 0 }
 };
 
 /* identity of the last probed socket's card, read from its CIS */
@@ -205,6 +231,8 @@ int main(int argc, char **argv)
     unsigned base = 0x220, fm = 0x388, mpu = 0x330, irq = 5, sock = 0, memseg = 0xD000;
     int off = 0, sgiven = 0, found = 0, any_chip = 0, i, mpu_ok = 0;
     int en_fm = 0, en_mpu = 0, en_joy = 0;     /* add-ons (SB is always on) */
+    int gpo_set = 0, en_tone = 0;              /* TEST: amp-enable GPO hunt */
+    unsigned char gpo_val = 0;
     unsigned chip, half;
     unsigned char maj, min, v, m40;
     unsigned char __far *cor;
@@ -223,14 +251,20 @@ int main(int argc, char **argv)
         else if (sw(a, "S",   &vp)) { if (vp) { sock = (unsigned)strtol(vp, 0, 10); sgiven = 1; } }
         else if (sw(a, "I",   &vp)) { if (vp) irq = (unsigned)strtol(vp, 0, 10); }
         else if (sw(a, "W",   &vp)) { if (vp) memseg = (unsigned)strtol(vp, 0, 16); }
+        else if (sw(a, "GPO", &vp)) { if (vp) { gpo_val = (unsigned char)strtol(vp, 0, 16); gpo_set = 1; } }
+        else if (sw(a, "TONE",&vp)) en_tone = 1;
         else printf("Ignoring unknown switch: %s\n", a);
     }
     if (!off && !en_fm && !en_mpu && !en_joy) { en_fm = 1; en_mpu = 1; }  /* default add-ons */
 
-    /* --- plan the two I/O windows: win0 = SB; win1 = JOY or FM/MPU --- */
+    /* --- plan the two I/O windows -----------------------------------------
+     * win0 = the SB block; with /JOY it also stretches down to the gameport
+     * (0x201, just below the SB base). win1 = the FM/MPU cluster above the base.
+     * Folding the gameport into win0 (not spending win1 on it) lets /JOY run
+     * together with /FM and /MPU. */
     w0s = base; w0e = base + 15;
-    if (en_joy) { w1s = 0x200; w1e = 0x207; have_w1 = 1; }
-    else if (en_fm || en_mpu) {
+    if (en_joy) w0s = 0x200;                    /* fold the gameport (0x201) into win0 */
+    if (en_fm || en_mpu) {
         w1s = 0x3FF; w1e = 0x200;
         if (en_mpu) { if (mpu < w1s) w1s = mpu; if (mpu + 1 > w1e) w1e = mpu + 1; }
         if (en_fm)  { if (fm  < w1s) w1s = fm;  if (fm  + 1 > w1e) w1e = fm  + 1; }
@@ -242,13 +276,6 @@ int main(int argc, char **argv)
     if (!off) {
         if (force && !sgiven) {
             printf("/FORCE needs /S=n : name the socket to configure without the CIS check.\n");
-            return 2;
-        }
-        if (en_joy && (en_fm || en_mpu)) {
-            printf("/JOY can't be combined with /FM or /MPU.\n");
-            printf("Only two I/O windows: the gameport (201) is below the SB base, FM/MPU\n");
-            printf("(330-388) are above it, so window 1 can't reach both. (SB-base FM still\n");
-            printf("works with /JOY.) Drop /JOY, or drop /FM and /MPU.\n");
             return 2;
         }
         if (irq > 15) { printf("Bad /I=%u : IRQ must be 0..15\n", irq); return 2; }
@@ -301,6 +328,17 @@ int main(int argc, char **argv)
             else             printf("No known card in any socket. Use /FORCE /S=n for an unreadable CIS.\n");
             return any_chip ? 3 : 1;
         }
+    }
+
+    /* Drop MPU on cards that can't use it: the Panasonic/Eiger have no MIDI jack,
+     * and the IBM box's IDE-bridge glue doesn't decode A8 so the MPU port (0x3x0)
+     * aliases onto the SB/IDE/gameport (0x2x0) - enabling it just injects noise.
+     * Recompute win1 without the MPU port. (Explicit /MPU is overridden too.) */
+    if (g_match && g_match->no_mpu && en_mpu) {
+        en_mpu = 0;
+        have_w1 = 0; w1s = w1e = 0;
+        if (en_fm) { w1s = fm; w1e = fm + 1; have_w1 = 1; }
+        printf("Note: %s has no usable MPU-401 - MPU disabled.\n", g_match->name);
     }
 
     /* COR via the attribute window probe_socket left mapped. Base comes from the
@@ -358,6 +396,16 @@ int main(int argc, char **argv)
         }
     }
 
+    /* Box amp-enable. Some combo cards gate their output power amp off an ES1688
+     * general-purpose output (port base+7 = 2x7h; bit0=GPO0, bit1=GPO1, "for
+     * power management or other applications" per the ES1688 brief). The IBM
+     * CD-ROM box needs GPO0 high (write 0x01) or it stays dead-silent - the Win95
+     * driver does this, DOS Card Services never does. The manifest carries the
+     * per-card value; /GPO=nn overrides it for probing a new combo card. */
+    if (gpo_set)                               outp(base + 7, gpo_val);
+    else if (g_match && g_match->amp_gpo >= 0) outp(base + 7, (unsigned char)g_match->amp_gpo);
+    if (en_tone) fm_tone(base);
+
     printf("%s%s: socket %u%s  DSP v%u.%02u\n",
            g_match ? g_match->name : "Unknown card",
            g_match ? "" : " (FORCED)",
@@ -371,6 +419,9 @@ int main(int argc, char **argv)
     printf("\n   I/O windows: win0 %03X-%03X", w0s, w0e);
     if (have_w1) printf(", win1 %03X-%03X", w1s, w1e);
     printf("\n");
+    if (gpo_set)                               printf("   amp-enable: GPO %03Xh <- %02X (override)\n", base + 7, gpo_val);
+    else if (g_match && g_match->amp_gpo >= 0) printf("   amp-enable: GPO %03Xh <- %02X\n", base + 7, (unsigned char)g_match->amp_gpo);
+    if (en_tone)  printf("   TEST: OPL tone playing on SB-base FM\n");
     if (en_mpu && !mpu_ok) printf("   (MPU not confirmed - needs IRQ 5/7/9/10 and a 3x0 port)\n");
     return 0;
 }
