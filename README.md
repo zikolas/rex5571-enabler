@@ -202,6 +202,8 @@ disassembling any vendor driver.
   less than a year ago *without* COMrade: an incredibly difficult, heavily manual
   process that ultimately failed. Pairing Claude with COMrade's live feedback loop
   is what finally cracked it.
+- **[The PCMCIA Sound Card Spreadsheet](https://docs.google.com/spreadsheets/d/181yznQ-DEMQRVl0X3s09NH7WD87eM3ui16isHKjIz5c)**,
+  maintained by **Bondi** — a community catalog of PCMCIA sound cards and their IDs.
 
 ## License
 
