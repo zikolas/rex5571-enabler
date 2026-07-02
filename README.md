@@ -31,13 +31,14 @@ PCMCIA host controller and the ES1688 directly, then gets out of the way.
 | Ratoc **REX-5572** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Panasonic/KME **KXL-C101**<sup>1</sup> | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Eiger Labs **EPX-AA2000**<sup>2</sup> | ✅ | ✅ | ✅ | ❌ | ❌ |
-| IBM **PCMCIA CD-ROM** | ✅ | ✅ | ✅ | ❌ | ✅ |
+| IBM **PCMCIA CD-ROM**<sup>3</sup> | ✅ | ✅ | ✅ | ❌ | ❓ |
 
 <sup>1</sup> Also sold as the **Panasonic KXL-D20** and **KXL-D745**.
 <sup>2</sup> The **Fujitsu 16-bit Stereo Sound Card** carries the same ID and is also supported.
+<sup>3</sup> The IBM **PCMCIA Portable CD-ROM Drive with Sound** (models **1969-111** / **1969-011**) and the **CD-400S**
 
-**Legend:** ✅ works · ❌ not available on that card. All confirmed on real
-hardware.
+**Legend:** ✅ works · ❌ not available on that card · ❓ not yet confirmed. All
+✅/❌ verified on real hardware.
 
 Every listed card does the ES1688 core — Sound Blaster Pro direct-DAC, ESFM at the
 SB base, and AdLib at `0x388`. The differences are only at the edges:
@@ -45,10 +46,11 @@ SB base, and AdLib at `0x388`. The differences are only at the edges:
 - **MPU-401** is off for the Panasonic, Eiger and IBM box — the first two have no
   MIDI connector, and the IBM box's CD-ROM bridge doesn't decode enough address
   lines to expose the MPU port (it aliases onto the SB/IDE ports, so enabling it
-  just adds noise). REXENA drops MPU automatically on those; the RATOC twins keep
+  just adds noise). REXENA drops MPU automatically on those; the RATOC cards keep
   it. (See [MIDI](#midi-mpu-401) for how MIDI reaches a synth.)
-- **Gameport** is present on the RATOC twins and the IBM box, but not on the
-  Panasonic or Eiger.
+- **Gameport** is on the RATOC cards. The IBM boxes have a gameport connector, but
+  it's not yet confirmed working — `0x201` read dead in testing, suspected to be the
+  test joystick (pending a known-good stick). The Panasonic and Eiger have none.
 
 ## The story: built remotely, on real hardware, by ear
 
