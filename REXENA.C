@@ -59,6 +59,37 @@ static unsigned char rd(unsigned reg){ outp(pcic_idx, sockoff+reg); return (unsi
 static void          wr(unsigned reg, unsigned val){ outp(pcic_idx, sockoff+reg); outp(pcic_idx+1, val); }
 static int  controller_present(void){ return (rd(0x00) & 0xC0) == 0x80; }
 
+/* Collision guard: return the number of any OTHER socket (across all PCICs) whose
+ * enabled I/O window overlaps [lo..hi], or -1 if none. Reads controller state
+ * only - it programs nothing, so it's safe to call before configuring. Catches a
+ * second /FORCE run (or a Card-Services-mapped card) sitting on the same base,
+ * which would otherwise leave two cards fighting on the bus. Restores the caller's
+ * socket selection on exit. */
+static int io_window_conflict(unsigned my_sock, unsigned lo, unsigned hi)
+{
+    unsigned save_idx = pcic_idx, save_off = sockoff, s;
+    int conflict = -1;
+    for (s = 0; s <= MAX_SOCKET && conflict < 0; s++) {
+        unsigned en, ws, we;
+        if (s == my_sock) continue;                 /* our own socket is fine */
+        select_socket(s);
+        if (!controller_present()) continue;
+        en = rd(0x06);
+        if (en & 0x40) {                            /* I/O window 0 enabled */
+            ws = rd(0x08) | ((unsigned)rd(0x09) << 8);
+            we = rd(0x0A) | ((unsigned)rd(0x0B) << 8);
+            if (lo <= we && ws <= hi) conflict = (int)s;
+        }
+        if (conflict < 0 && (en & 0x80)) {          /* I/O window 1 enabled */
+            ws = rd(0x0C) | ((unsigned)rd(0x0D) << 8);
+            we = rd(0x0E) | ((unsigned)rd(0x0F) << 8);
+            if (lo <= we && ws <= hi) conflict = (int)s;
+        }
+    }
+    pcic_idx = save_idx; sockoff = save_off;
+    return conflict;
+}
+
 static void iodelay(unsigned long n){ while(n--) (void)inp(0x80); }
 #define MS(x) iodelay((unsigned long)(x)*1000UL)
 
@@ -229,7 +260,7 @@ static int sw(const char *a, const char *name, char **val)
 int main(int argc, char **argv)
 {
     unsigned base = 0x220, fm = 0x388, mpu = 0x330, irq = 5, sock = 0, memseg = 0xD000;
-    int off = 0, sgiven = 0, found = 0, any_chip = 0, i, mpu_ok = 0;
+    int off = 0, sgiven = 0, found = 0, any_chip = 0, i, mpu_ok = 0, conflict;
     int en_fm = 0, en_mpu = 0, en_joy = 0;     /* add-ons (SB is always on) */
     int gpo_set = 0, en_tone = 0;              /* TEST: amp-enable GPO hunt */
     unsigned char gpo_val = 0;
@@ -339,6 +370,23 @@ int main(int argc, char **argv)
         have_w1 = 0; w1s = w1e = 0;
         if (en_fm) { w1s = fm; w1e = fm + 1; have_w1 = 1; }
         printf("Note: %s has no usable MPU-401 - MPU disabled.\n", g_match->name);
+    }
+
+    /* Collision guard: refuse if another socket already maps I/O overlapping the
+     * ports we're about to claim - e.g. a second /FORCE run at the same base. Two
+     * cards decoding one base fight on the bus (garbled reads, stressed drivers).
+     * Checked before we program anything, so a refusal leaves the bus untouched;
+     * we only power our own socket back down. */
+    conflict = io_window_conflict(sock, w0s, w0e);
+    if (conflict < 0 && have_w1) conflict = io_window_conflict(sock, w1s, w1e);
+    if (conflict >= 0) {
+        printf("Refusing: socket %d already maps I/O overlapping %03X-%03X.\n"
+               "  Another live card there would fight on the bus. Give this card a\n"
+               "  different /SB base (and /FM/MPU), or /OFF socket %d first.\n",
+               conflict, w0s, w0e, conflict);
+        select_socket(sock);
+        wr(0x06, 0x00); wr(0x03, 0x00); wr(0x02, 0x00);   /* power our socket down */
+        return 4;
     }
 
     /* COR via the attribute window probe_socket left mapped. Base comes from the
