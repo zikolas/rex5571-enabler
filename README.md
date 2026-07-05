@@ -15,7 +15,7 @@ cards and likely more.
 | Ratoc **REX-5571**<br>**REX-5572** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Panasonic **KXL-C101**<br>**KXL-D20**<br>**KXL-D745** | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Eiger Labs **EPX-AA2000**<br>Fujitsu **16-bit Stereo** | ✅ | ✅ | ✅ | ❌ | ❌ |
-| IBM **PCMCIA CD-ROM**<br>**1969-011**<br>**1969-111**<br>**CD-400S** | ✅ | ✅ | ✅ | ❌ | ❓ |
+| IBM **PCMCIA CD-ROM**<br>**1969-011**<br>**1969-111**<br>**CD-400S** | ✅ | ✅ | ✅ | ❌ | ❌ |
 
 **Legend:** ✅ works · ❌ not possible · ❓ not yet confirmed.
 

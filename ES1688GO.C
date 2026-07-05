@@ -119,16 +119,19 @@ struct known_card {
     unsigned char cor_index;     /* COR config index for the sound function */
     int           amp_gpo;       /* box amp-enable: byte for ES1688 GPO port base+7, or -1 = none */
     int           no_mpu;        /* 1 = no usable MPU-401 (no MIDI jack, or the port aliases) */
+    int           no_joy;        /* 1 = gameport is NOT at 201 (card glue can't decode it) */
     char         *name;
 };
 static struct known_card known_cards[] = {
-    { 0xC015, 0x0001, "CARD 72", 0x20, -1,   0, "RATOC REX-5572"                },
-    { 0xC015, 0x0001, "CARD 71", 0x20, -1,   0, "RATOC REX-5571"                },
-    { 0xC015, 0x0001, 0,         0x20, -1,   0, "RATOC REX-5571/5572 (unknown)" },
-    { 0x0032, 0x0204, 0,         0x20, -1,   1, "Panasonic/KME KXL-C101"        }, /* a.k.a. KXL-D20 / KXL-D745; no MIDI */
-    { 0x0004, 0x2000, "EPX-AA2000", 0x20, -1, 1, "Eiger Labs EPX-AA2000"        }, /* ES1688; COR base 0x3F0; no MIDI */
-    { 0x00A4, 0x002D, "CD-ROM", 0x01, 0x01,  1, "IBM Portable CD-ROM (ES1688)"  }, /* combo CD+ES1688; GPO0 gates amp; MPU aliases onto IDE/SB */
-    { 0, 0, 0, 0, -1, 0, 0 }
+    { 0xC015, 0x0001, "CARD 72", 0x20, -1,   0, 0, "RATOC REX-5572"                },
+    { 0xC015, 0x0001, "CARD 71", 0x20, -1,   0, 0, "RATOC REX-5571"                },
+    { 0xC015, 0x0001, 0,         0x20, -1,   0, 0, "RATOC REX-5571/5572 (unknown)" },
+    { 0x0032, 0x0204, 0,         0x20, -1,   1, 0, "Panasonic/KME KXL-C101"        }, /* a.k.a. KXL-D20 / KXL-D745; no MIDI */
+    { 0x0004, 0x2000, "EPX-AA2000", 0x20, -1, 1, 0, "Eiger Labs EPX-AA2000"        }, /* ES1688; COR base 0x3F0; no MIDI */
+    { 0x00A4, 0x002D, "CD-ROM", 0x01, 0x01,  1, 1, "IBM Portable CD-ROM (ES1688)"  }, /* combo CD+ES1688; GPO0 gates amp; MPU
+                                                     aliases onto IDE/SB. A4-only decode: 201 is the FM DATA register, so /JOY
+                                                     would let games scribble on the OPL - gameport is at (A4=1)+8; use CD20XGO. */
+    { 0, 0, 0, 0, -1, 0, 0, 0 }
 };
 
 /* identity of the last probed socket's card, read from its CIS */
@@ -411,6 +414,15 @@ int main(int argc, char **argv)
         have_w1 = 0; w1s = w1e = 0;
         if (en_fm) { w1s = fm; w1e = fm + 1; have_w1 = 1; }
         printf("Note: %s has no usable MPU-401 - MPU disabled.\n", g_match->name);
+    }
+
+    /* Drop /JOY on cards whose glue can't decode 201 at all (the IBM combo
+     * card: 201 lands on its FM DATA register, so a game's gameport trigger
+     * writes would scribble on the OPL). Un-stretch win0 back to the SB base. */
+    if (g_match && g_match->no_joy && en_joy) {
+        en_joy = 0;
+        w0s = base;
+        printf("Note: no gameport at 201 on this card - JOY off (see CD20XGO).\n");
     }
 
     /* COR via the attribute window probe_socket left mapped. Base comes from the
