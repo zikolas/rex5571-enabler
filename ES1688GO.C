@@ -208,6 +208,7 @@ static int mem_win_overlaps(unsigned cseg)
         for (half = 0; half < 2; half++) {
             unsigned char en;
             sockoff = half ? 0x40 : 0x00;
+            if (!controller_present()) continue;        /* unimplemented bank floats 0xFF */
             en = rd(0x06);
             for (w = 0; w < 5; w++) {
                 unsigned b = 0x10 + w * 8, ws, we;
@@ -243,7 +244,8 @@ static int probe_socket(unsigned memseg)
 {
     unsigned start, stop, woff;
     unsigned char s03, s06, s10, s11, s12, s13, s14, s15;
-    int was_on;
+    int was_on, i;
+    if (!controller_present()) return 0;                 /* unimplemented bank floats 0xFF - not a socket */
     if ((rd(0x01) & 0x0C) != 0x0C) return 0;             /* no card present */
     was_on = (rd(0x01) & 0x40) != 0;                     /* power up already => a card is running here */
     /* save the socket regs we borrow for the CIS read, so an already-running card
@@ -252,10 +254,16 @@ static int probe_socket(unsigned memseg)
     s10 = rd(0x10); s11 = rd(0x11); s12 = rd(0x12);
     s13 = rd(0x13); s14 = rd(0x14); s15 = rd(0x15);
     if (!was_on) {                                       /* only power a socket we found off */
-        wr(0x02, 0x95); MS(20);
+        wr(0x02, 0x95);
+        /* Poll power-good rather than a fixed wait: the 82365SL asserts it near
+         * instantly, but CardBus-era bridges (e.g. ThinkPad 235) ramp Vcc through
+         * a soft power switch and can take a few hundred ms. */
+        for (i = 0; i < 50; i++) { MS(10); if (rd(0x01) & 0x40) break; }
         if (!(rd(0x01) & 0x40)) { wr(0x02, 0x00); return 0; }
+        MS(100);                                         /* card settle after power-good */
     }
-    wr(0x03, 0x40); MS(10);                              /* reset off, memory mode */
+    wr(0x03, 0x40); MS(100);                             /* reset off, memory mode; the card
+                                                          * may take a while to come ready */
     start = memseg >> 8;
     stop  = (memseg >> 8) + 3;
     woff  = ((unsigned)(0 - (memseg >> 8)) & 0x3FFF) | 0x4000;
@@ -263,6 +271,7 @@ static int probe_socket(unsigned memseg)
     wr(0x12, stop  & 0xFF);  wr(0x13, (stop  >> 8) & 0x3F);
     wr(0x14, woff  & 0xFF);  wr(0x15, (woff  >> 8) & 0xFF);
     wr(0x06, rd(0x06) | 0x01);                           /* enable mem win0 (keep other windows) */
+    MS(20);                                              /* window settle */
     read_cis(memseg);                                    /* fill g_manf/g_card/g_vers */
     g_match = identify();                                 /* manifest lookup (NULL = unknown) */
     if (force || g_match) return 1;                      /* ours: leave it powered + mapped */
